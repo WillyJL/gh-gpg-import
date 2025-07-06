@@ -1,33 +1,27 @@
 #!/usr/bin/env bash
 set -e
 
-function get_user_signing_keys() {
+function get_user_gpg_keys() {
 	local USER="$1"
-	local TEMPLATE="{{ range . }}{{ printf \"$USER@users.noreply.github.com %s\\n\" .key }}{{ end }}"
+	local TEMPLATE="{{ range . }}{{ printf \"%s\\n\" .raw_key }}{{ end }}"
 
-	echo "Pulling signing keys for user:  $USER"
-	gh api "users/$USER/ssh_signing_keys" --paginate --template="${TEMPLATE}" >> $OUTPUTFILE
+	echo "Importing GPG keys for user:  $USER"
+	gh api "users/$USER/gpg_keys" --paginate --template="${TEMPLATE}" | gpg --import
 }
 
-APPEND=false
-FORCE=false
 ORGANIZATION=
-OUTPUTFILE=~/.ssh/allowed_signers
 TEAM=
 USER=
 
 __USAGE="
-Generate SSH allowed signers file from GitHub users.
+Import GPG keys from GitHub users.
 
 USAGE
   $(basename $0) [options] <organization>/<team>
   $(basename $0) [options] <user>
 
 FLAGS
-  -a, --append                        Append signing keys to existing SSH allowed signers file
   -d, --debug                         Enable debugging
-  -f, --force                         Whether to overwrite output file if it exists
-  -o, --output-file <output-file>     Path to SSH allowed signers file to generate; default '$OUTPUTFILE'
 ";
 
 die() {
@@ -40,7 +34,7 @@ if ! type -p gh > /dev/null; then
 	die "'gh' could not be found"
 fi
 
-while getopts "adfho:-:" OPT; do
+while getopts "dh:-:" OPT; do
 	if [ "$OPT" = "-" ]; then    # long option: reformulate OPT and OPTARG
 		OPT="${OPTARG%%=*}"      # extract long option name
 		OPTARG="${OPTARG#$OPT}"	 # extract long option argument (may be empty)
@@ -49,25 +43,13 @@ while getopts "adfho:-:" OPT; do
 
 	case "$OPT" in
 
-		append | a)
-			APPEND=true
-			;;
-
 		debug | d)
 			set -x
-			;;
-
-		force | f)
-			FORCE=true
 			;;
 
 		help | h)
 			echo "$__USAGE"
 			exit 0
-			;;
-
-		output-file | o)
-			OUTPUTFILE="${OPTARG}"
 			;;
 	esac
 done
@@ -82,19 +64,6 @@ elif [[ "$1" == *"/"* ]]; then
 	TEAM=$(echo $1 | cut -d '/' -f 2)
 else
 	USER="$1"
-fi
-
-# Handle situation if previous SSH allowed signers file exists
-echo "Using SSH allowed signers file:  $OUTPUTFILE"
-
-if ! $APPEND && test -e "$OUTPUTFILE"; then
-
-	if ! $FORCE; then
-		die "$OUTPUTFILE exists; -f, --force will delete if exists"
-	fi
-
-	echo "Deleting existing SSH allowed signers file:  $OUTPUTFILE"
-	rm -f $OUTPUTFILE
 fi
 
 if [ -z "${USER}" ]; then
@@ -115,11 +84,14 @@ if [ -z "${USER}" ]; then
 	  }
 	}'
 
-	echo "Pulling signing keys for team:  $ORGANIZATION/$TEAM"
+	echo "Pulling GPG keys for team:  $ORGANIZATION/$TEAM"
 
 	for user in $(gh api graphql -f query="${QUERY}" -F login="$ORGANIZATION" -F slug="$TEAM" --paginate --jq '.data.organization.team.members.nodes[].login'); do
-		get_user_signing_keys "${user}"
+		get_user_gpg_keys "${user}"
 	done
+elif [ "${USER}" = "GitHub" ]; then
+	echo "Importing GPG keys for GitHub web commits"
+	curl -s https://github.com/web-flow.gpg | gpg --import
 else
-	get_user_signing_keys "${USER}"
+	get_user_gpg_keys "${USER}"
 fi
